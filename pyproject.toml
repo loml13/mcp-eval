@@ -1,0 +1,24 @@
+[project]
+name = "mcp-eval"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "neu", email = "1223552894@qq.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.27.2",
+]
+
+[project.scripts]
+mcp-eval = "mcp_eval:main"
+
+[build-system]
+requires = ["uv_build>=0.11.12,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
