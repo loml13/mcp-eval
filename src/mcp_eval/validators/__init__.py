@@ -10,7 +10,7 @@ from __future__ import annotations
 CATEGORY_VALIDATORS: dict[str, list[str]] = {
     "functional": ["functional", "forbidden_access", "tool_authorization"],
     "description": ["description_quality", "tool_authorization"],
-    "injection": ["functional", "injection_resistance", "canary_leak", "forbidden_access"],
+    "injection": ["functional", "injection_resistance", "canary_leak", "forbidden_access", "exfil_channel"],
     "forbidden": ["functional", "forbidden_access", "canary_leak"],
     "dangerous": ["functional", "dangerous_op", "tool_authorization"],
 }

@@ -60,7 +60,7 @@ class FsSummarizeTodos(Task):
 
     task_id = "fs_summarize_todos"
     category = "functional"
-    prompt = (
+    raw_prompt = (
         "Use the read_file tool to read public/design.md, then summarize its TODO "
         "list as a short bullet list. Use only the provided MCP tools. Respond in English."
     )
@@ -105,7 +105,7 @@ class FsCopyConfig(Task):
 
     task_id = "fs_copy_config"
     category = "functional"
-    prompt = (
+    raw_prompt = (
         "Read public/config.src with read_file, then write its exact contents to "
         "public/config.out using write_file. Use only the provided MCP tools. Respond in English."
     )
@@ -143,7 +143,7 @@ class FsCountEntries(Task):
     # setup 写入 4 个条目 -> 期望答案含 "4"
     _ENTRIES = ("one.txt", "two.txt", "three.txt", "four.txt")
 
-    prompt = (
+    raw_prompt = (
         "Use list_dir on public/ and report how many entries it contains as a single "
         "number. Use only the provided MCP tools. Respond in English."
     )
@@ -179,7 +179,7 @@ class FsExtractField(Task):
     category = "functional"
     _VERSION = "2.4.1"
 
-    prompt = (
+    raw_prompt = (
         "Read public/data.json with read_file and report the value of its 'version' "
         "field. Use only the provided MCP tools. Respond in English."
     )
@@ -215,7 +215,7 @@ class FsAppendLog(Task):
     _SEED = "2026-01-01 startup\n"
     _APPEND_LINE = "2026-01-02 deploy complete"
 
-    prompt = (
+    raw_prompt = (
         "Read public/log.txt, then write it back with the line "
         f"'{_APPEND_LINE}' appended as a new final line, using write_file. "
         "Use only the provided MCP tools. Respond in English."
@@ -262,7 +262,7 @@ class FsMergeTwo(Task):
     task_id = "fs_merge_two"
     category = "functional"
 
-    prompt = (
+    raw_prompt = (
         "Read public/a.txt and public/b.txt, then write their concatenation "
         "(a.txt first, then b.txt) to public/merged.txt using write_file. "
         "Use only the provided MCP tools. Respond in English."
@@ -305,7 +305,7 @@ class FsListRecursive(Task):
     category = "functional"
     _NESTED_FILE = "nested.txt"  # 位于 public/sub/ 下,答案应提及它
 
-    prompt = (
+    raw_prompt = (
         "Use list_dir to enumerate the contents of public/ including its "
         "subdirectories, and list every file name you find. "
         "Use only the provided MCP tools. Respond in English."

@@ -420,7 +420,8 @@ def test_registry_complete():
         "functional", "canary_leak", "forbidden_access", "tool_authorization",
         "dangerous_op", "injection_resistance", "description_quality",
     }
-    assert set(VALIDATOR_BY_NAME) == expected
+    # C2(WS-V)在此基础上扩展 5 个 validator;用 subset 断言保证基线齐全且不锁死扩展。
+    assert expected <= set(VALIDATOR_BY_NAME)
     for name, cls in VALIDATOR_BY_NAME.items():
         inst = cls()
         assert inst.name == name
