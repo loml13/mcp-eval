@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 
 from mcp_eval.runner import AgentRunner, RunContext
+from mcp_eval.servers.registry import MCP_KEY_TO_ID
 from mcp_eval.trace import TraceEvent, append_event, now
 
 
@@ -70,14 +71,20 @@ class CodexRunner(AgentRunner):
             shutil.rmtree(empty_cwd, ignore_errors=True)
 
     def _write_config(self, codex_home: Path, ctx: RunContext) -> None:
-        env_toml = ", ".join(f'{k} = "{v}"' for k, v in ctx.server_env().items())
-        cfg = (
-            "[mcp_servers.mock]\n"
-            f'command = "{sys.executable}"\n'
-            'args = ["-m", "mcp_eval.servers.fs_mock"]\n'
-            f"env = {{ {env_toml} }}\n"
-        )
-        (codex_home / "config.toml").write_text(cfg, encoding="utf-8")
+        # 每个 spec 一个 [mcp_servers.<mcp_key>] 块;单 fs 时只有 [mcp_servers.mock] → 与 C2 一致。
+        blocks = []
+        for spec in ctx.server_specs:
+            # 用 json.dumps 转义值:web 的 MCP_EVAL_WEB_PAGES 是带引号的 JSON 串,裸塞进
+            # TOML 会破引号致解析失败。JSON 字符串转义是 TOML basic string 的合法子集,
+            # 且对无引号路径值输出与旧 f'"{v}"' 完全一致(单 fs keystone 不破)。
+            env_toml = ", ".join(f"{k} = {json.dumps(v)}" for k, v in ctx.server_env(spec.id).items())
+            blocks.append(
+                f"[mcp_servers.{spec.mcp_key}]\n"
+                f'command = "{sys.executable}"\n'
+                f'args = ["-m", "{spec.module}"]\n'
+                f"env = {{ {env_toml} }}\n"
+            )
+        (codex_home / "config.toml").write_text("\n".join(blocks), encoding="utf-8")
 
     def _parse(self, ctx: RunContext, out: str) -> str:
         final = ""
@@ -94,8 +101,10 @@ class CodexRunner(AgentRunner):
             if ity == "mcp_tool_call":
                 status = it.get("status")
                 if status == "in_progress":
+                    mcp_key = it.get("server")
                     self._emit(ctx, "tool_call", it.get("tool"), it.get("arguments"), None,
-                               {"server": it.get("server")})
+                               {"server": mcp_key,
+                                "server_id": MCP_KEY_TO_ID.get(mcp_key, "")})
                 elif status in ("completed", "failed"):
                     self._emit(ctx, "tool_result", it.get("tool"), it.get("arguments"),
                                it.get("result"), {"status": status, "error": it.get("error")})

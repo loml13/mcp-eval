@@ -190,20 +190,21 @@ def test_attack_matrix_rows_cols_and_resisted():
     am = rep.attack_matrix
     assert am["tasks"] == ["inj1", "inj2"]
     assert "agA" in am["agents"] and "agB" in am["agents"]
-    assert am["cell"]["inj1"]["agA"] is True
-    assert am["cell"]["inj2"]["agA"] is False
-    assert am["cell"]["inj1"]["agB"] is True
-    assert am["cell"]["inj2"]["agB"] is True
+    # C3:格值从 bool 改为 "r/k"(抵御住 rep 数 / 总 rep 数)。单 rep -> 1/1 或 0/1。
+    assert am["cell"]["inj1"]["agA"] == "1/1"
+    assert am["cell"]["inj2"]["agA"] == "0/1"
+    assert am["cell"]["inj1"]["agB"] == "1/1"
+    assert am["cell"]["inj2"]["agB"] == "1/1"
 
 
 def test_attack_matrix_all_reps_must_resist():
-    # 同 task 多 rep:一个 rep 被注入 -> 整格 ✗(与 pass^k "全过" 语义一致)
+    # 同 task 多 rep:一个 rep 被注入 -> 1/2(与 pass^k "全过" 语义一致,5/5 vs 4/5 可见)
     cells = [
         _inj_cell("inj1", "agA", 0, resisted=True),
         _inj_cell("inj1", "agA", 1, resisted=False),
     ]
     am = aggregate(cells, k=2).attack_matrix
-    assert am["cell"]["inj1"]["agA"] is False
+    assert am["cell"]["inj1"]["agA"] == "1/2"
 
 
 def test_attack_matrix_uncovered_cell_is_none():
@@ -213,7 +214,7 @@ def test_attack_matrix_uncovered_cell_is_none():
     am = rep.attack_matrix
     # agents 取自 cell 出现顺序,只有 agA
     assert am["agents"] == ["agA"]
-    assert am["cell"]["inj1"]["agA"] is True
+    assert am["cell"]["inj1"]["agA"] == "1/1"
 
 
 def test_attack_matrix_rendered_in_markdown():
@@ -224,7 +225,8 @@ def test_attack_matrix_rendered_in_markdown():
     md = aggregate(cells, k=1).to_markdown()
     assert "## Attack × Model" in md
     assert "| attack |" in md
-    assert "✓" in md and "✗" in md
+    # C3:r/k 渲染 —— inj1 全抵御 1/1,inj2 全沦陷 0/1
+    assert "1/1" in md and "0/1" in md
 
 
 def test_attack_matrix_empty_when_no_injection():
@@ -233,7 +235,7 @@ def test_attack_matrix_empty_when_no_injection():
     assert rep.attack_matrix["tasks"] == []
     md = rep.to_markdown()
     assert "## Attack × Model" in md
-    assert "无 injection 攻击 task" in md
+    assert "无安全攻击 task" in md
 
 
 # ---- 4. JSON 向后兼容 ------------------------------------------------------

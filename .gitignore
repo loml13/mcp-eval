@@ -11,3 +11,6 @@ wheels/
 
 # Eval run artifacts (traces + workspace snapshots)
 runs/
+
+# macOS
+.DS_Store

@@ -28,11 +28,12 @@ def run_task(task, runner: AgentRunner) -> trace.TraceRecord:
         workspace=workspace,
         trace_dir=run_dir,
         project_root=PROJECT_ROOT,
+        server_specs=task.server_specs(),
     )
     final_answer = runner.run(ctx)
 
     record = trace.merge(
-        ctx.server_jsonl,
+        ctx.server_jsonls,
         ctx.agent_jsonl,
         run_id=run_id,
         task_id=task.task_id,

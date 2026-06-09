@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 
 from mcp_eval.runner import AgentRunner, RunContext
+from mcp_eval.servers.registry import MCP_KEY_TO_ID
 from mcp_eval.trace import TraceEvent, append_event, now
 
 # 禁掉所有会操作环境的内置工具,强制 agent 只能通过 mock MCP server 操作环境。
@@ -21,7 +23,6 @@ _BUILTIN_DENY = (
     "Bash Edit Read Write Glob Grep WebFetch WebSearch "
     "NotebookEdit Task TodoWrite MultiEdit"
 )
-_MCP_PREFIX = "mcp__mock__"
 
 
 class ClaudeCodeRunner(AgentRunner):
@@ -34,12 +35,14 @@ class ClaudeCodeRunner(AgentRunner):
 
     def run(self, ctx: RunContext) -> str:
         mcp_config = self._write_mcp_config(ctx)
+        # 单 fs → 恰好 "mcp__mock__*"(back-compat 命门);多 server 空格拼接各 mcp_key 通配。
+        allowed_tools = " ".join(f"mcp__{s.mcp_key}__*" for s in ctx.server_specs)
         cmd = [
             "claude", "-p", ctx.task.prompt,
             "--output-format", "stream-json", "--verbose",
             "--mcp-config", str(mcp_config),
             "--strict-mcp-config",
-            "--allowedTools", "mcp__mock__*",
+            "--allowedTools", allowed_tools,
             "--disallowedTools", _BUILTIN_DENY,
             "--permission-mode", "bypassPermissions",
             "--add-dir", str(ctx.workspace),
@@ -74,13 +77,15 @@ class ClaudeCodeRunner(AgentRunner):
         return final
 
     def _write_mcp_config(self, ctx: RunContext):
+        # 每个 spec 一个 mcpServers 条目;单 fs 时只有 "mock" 一项 → config 与 C2 完全一致。
         cfg = {
             "mcpServers": {
-                "mock": {
+                spec.mcp_key: {
                     "command": sys.executable,
-                    "args": ["-m", "mcp_eval.servers.fs_mock"],
-                    "env": ctx.server_env(),
+                    "args": ["-m", spec.module],
+                    "env": ctx.server_env(spec.id),
                 }
+                for spec in ctx.server_specs
             }
         }
         path = ctx.trace_dir / "mcp_config.json"
@@ -93,9 +98,14 @@ class ClaudeCodeRunner(AgentRunner):
             msg = ev.get("message", {})
             for block in msg.get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
-                    name = (block.get("name") or "").removeprefix(_MCP_PREFIX)
+                    raw = block.get("name") or ""
+                    # 剥任意 mcp__<key>__ 前缀(工具名都是单 token snake_case);从 key 反查逻辑 server_id。
+                    m = re.match(r"^mcp__([^_]+)__", raw)
+                    name = re.sub(r"^mcp__[^_]+__", "", raw)
+                    server_id = MCP_KEY_TO_ID.get(m.group(1), "") if m else ""
                     self._emit(ctx, "tool_call", name, block.get("input"), None,
-                               {"raw_name": block.get("name"), "tool_use_id": block.get("id")})
+                               {"raw_name": raw, "tool_use_id": block.get("id"),
+                                "server_id": server_id})
             usage = msg.get("usage") or {}
             if usage:
                 self._emit(ctx, "usage", None, None, None, {

@@ -31,20 +31,35 @@ def events(rec: TraceRecord | dict) -> list[dict[str, Any]]:
     return _get(rec, "events", []) or []
 
 
-def server_events(rec: TraceRecord | dict) -> list[dict[str, Any]]:
-    return [e for e in events(rec) if e.get("source") == "server"]
+def server_events(rec: TraceRecord | dict, server_id: str | None = None) -> list[dict[str, Any]]:
+    # server_id=None(默认)= 全部 server;给定时按 e['server_id'] 过滤(多 server provenance)。
+    out = [e for e in events(rec) if e.get("source") == "server"]
+    if server_id is not None:
+        out = [e for e in out if e.get("server_id") == server_id]
+    return out
 
 
-def server_calls(rec: TraceRecord | dict) -> list[dict[str, Any]]:
-    return [e for e in server_events(rec) if e.get("type") in _CALL_TYPES]
+def server_calls(rec: TraceRecord | dict, server_id: str | None = None) -> list[dict[str, Any]]:
+    return [e for e in server_events(rec, server_id) if e.get("type") in _CALL_TYPES]
 
 
-def reads(rec: TraceRecord | dict) -> list[dict[str, Any]]:
-    return [e for e in server_events(rec) if e.get("type") == "resource_read"]
+def reads(rec: TraceRecord | dict, server_id: str | None = None) -> list[dict[str, Any]]:
+    return [e for e in server_events(rec, server_id) if e.get("type") == "resource_read"]
 
 
-def sinks(rec: TraceRecord | dict) -> list[dict[str, Any]]:
-    return [e for e in server_events(rec) if e.get("type") == "sink"]
+def sinks(rec: TraceRecord | dict, server_id: str | None = None) -> list[dict[str, Any]]:
+    return [e for e in server_events(rec, server_id) if e.get("type") == "sink"]
+
+
+def sink_payloads(e: dict) -> list[str]:
+    """从 sink 事件 args 抽出可能承载外发内容的字段(body / content / data)。供 exfil_channel 复用。"""
+    args = e.get("args") or {}
+    out: list[str] = []
+    for k in ("body", "content", "data"):
+        v = args.get(k)
+        if isinstance(v, str):
+            out.append(v)
+    return out
 
 
 def is_outside_allowed(e: dict) -> bool:

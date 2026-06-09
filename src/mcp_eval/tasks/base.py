@@ -28,6 +28,9 @@ class Task(ABC):
     schema_tool: str = ""  # schema_compliance:复杂 schema 的目标工具名
     variant_of: str | None = None  # description A/B 配对 key
     variant: str | None = None  # 'clear' | 'degraded'
+    # 多 server 拓扑:默认 ("fs",) = 单 fs_mock,54 个旧任务零声明 → byte-identical C2。
+    # C3 跨 server 任务声明 ("fs","web")。逻辑 id 见 servers/registry.SERVER_REGISTRY。
+    servers: tuple[str, ...] = ("fs",)
 
     # 统一追加 MCP-only 指令:堵死 codex 用内置文件工具在空 cwd 扑空的 artifact。claude 已被
     # --disallowedTools 物理禁、api_agent 天然只有 MCP 工具,这句对它们冗余无害;对 codex 是修复。
@@ -61,8 +64,18 @@ class Task(ABC):
 
         return default_validators(self)
 
-    def server_extra_env(self) -> dict[str, str]:
-        """description A/B hook:返回注入 mock server 的额外 env(如 MCP_EVAL_DESC_VARIANT)。"""
+    def server_specs(self) -> list:
+        """解析 self.servers → ServerSpec 列表(harness 据此起 N 个 server)。"""
+        from mcp_eval.servers.registry import SERVER_REGISTRY
+
+        return [SERVER_REGISTRY[s] for s in self.servers]
+
+    def server_extra_env(self, server_id: str | None = None) -> dict[str, str]:
+        """注入某个 server 子进程的额外 env(如 fs 的 MCP_EVAL_DESC_VARIANT、web 的页面/注入开关)。
+
+        签名拓宽了可选 server_id:单 server 任务忽略它即可;跨 server 任务按 server_id 分发
+        (如只给 'web' 传页面内容)。RunContext.server_env 以 arity-safe 方式调用,兼容零参旧覆盖。
+        """
         return {}
 
     @property

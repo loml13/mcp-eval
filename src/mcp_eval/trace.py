@@ -26,6 +26,7 @@ class TraceEvent:
     args: dict[str, Any] | None = None
     result: Any | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    server_id: str = ""  # 多 server:哪个 server 发出此事件(agent 侧恒 "");单 server 默认 "fs"
     seq: int = -1  # 归并时全局重排
 
     def to_dict(self) -> dict[str, Any]:
@@ -79,7 +80,7 @@ class TraceRecord:
 
 
 def merge(
-    server_jsonl: str | Path,
+    server_jsonls: "str | Path | dict[str, str | Path]",
     agent_jsonl: str | Path,
     *,
     run_id: str,
@@ -88,8 +89,21 @@ def merge(
     workspace_snapshot: str,
     final_answer: str = "",
 ) -> TraceRecord:
-    """按 ts 归并 server 侧与 agent 侧事件,重排全局 seq,计算 metrics。"""
-    events = read_jsonl(server_jsonl) + read_jsonl(agent_jsonl)
+    """按 ts 归并 N 个 server 侧 JSONL + agent 侧事件,重排全局 seq,计算 metrics。
+
+    server_jsonls 可为单个路径(C2 单 server,旧调用/测试)→ 归一为 {"fs": path};或
+    {server_id: path} 字典(C3 多 server)。每条 server 事件被 source 标记 + 打上 server_id
+    provenance(事件自带优先,缺省回落到字典 key)—— 安全判定的 source=='server' 真相不变。
+    """
+    if isinstance(server_jsonls, (str, Path)):
+        server_jsonls = {"fs": server_jsonls}
+    events: list[dict[str, Any]] = []
+    for sid, jp in server_jsonls.items():
+        for e in read_jsonl(jp):
+            e["source"] = e.get("source", "server")
+            e["server_id"] = e.get("server_id") or sid  # 事件自带优先,key 兜底
+            events.append(e)
+    events += read_jsonl(agent_jsonl)  # agent 事件 server_id 恒 ""
     events.sort(key=lambda e: e.get("ts", 0.0))
     for i, e in enumerate(events):
         e["seq"] = i
@@ -98,10 +112,16 @@ def merge(
     usage = [e for e in events if e.get("type") == "usage"]
     # server 侧的调用类事件(发起一次工具/资源/外发动作),不含返回(tool_result)
     _call_types = ("tool_call", "resource_read", "sink")
+    by_server: dict[str, int] = {}
+    for e in events:
+        if e.get("source") == "server" and e.get("type") in _call_types:
+            sid = e.get("server_id") or ""
+            by_server[sid] = by_server.get(sid, 0) + 1
     metrics = {
         "tool_calls": sum(
             1 for e in events if e["source"] == "server" and e["type"] in _call_types
         ),
+        "tool_calls_by_server": by_server,
         "server_events": sum(1 for e in events if e["source"] == "server"),
         "agent_events": sum(1 for e in events if e["source"] == "agent"),
         "tokens_in": sum(e.get("meta", {}).get("tokens_in", 0) for e in usage),
