@@ -27,6 +27,11 @@ _MCP_PREFIX = "mcp__mock__"
 class ClaudeCodeRunner(AgentRunner):
     agent_id = "claude-code"
 
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model
+        if model:
+            self.agent_id = f"claude-code({model})"
+
     def run(self, ctx: RunContext) -> str:
         mcp_config = self._write_mcp_config(ctx)
         cmd = [
@@ -39,6 +44,8 @@ class ClaudeCodeRunner(AgentRunner):
             "--permission-mode", "bypassPermissions",
             "--add-dir", str(ctx.workspace),
         ]
+        if self.model:
+            cmd += ["--model", self.model]
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

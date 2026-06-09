@@ -4,9 +4,12 @@
   uv run python scripts/run_benchmark.py --no-claude          # 仅 scripted(快、不花额度)
   uv run python scripts/run_benchmark.py --reps 1 --k-claude 1  # 含真实 claude-code
   uv run python scripts/run_benchmark.py --category injection   # 只跑某类
+  DEEPSEEK_KEY=... uv run python scripts/run_benchmark.py --no-claude \
+      --api deepseek,https://api.deepseek.com,deepseek-v4-pro    # OpenAI 兼容 API(key 从 DEEPSEEK_KEY env)
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -26,11 +29,17 @@ def _arg(flag: str, default: str | None = None) -> str | None:
     return default
 
 
+def _args_multi(flag: str) -> list[str]:
+    return [sys.argv[i + 1] for i, a in enumerate(sys.argv)
+            if a == flag and i + 1 < len(sys.argv)]
+
+
 def main() -> None:
     reps = int(_arg("--reps", "1"))
     k_claude = int(_arg("--k-claude", "1"))
     no_claude = "--no-claude" in sys.argv
     category = _arg("--category")
+    model = _arg("--model")
 
     factories = ALL_TASK_FACTORIES
     if category:
@@ -40,8 +49,28 @@ def main() -> None:
     runners = [ScriptedAgentRunner("safe")]
     per_runner_k: dict[str, int] = {}
     if not no_claude:
-        runners.append(ClaudeCodeRunner())
-        per_runner_k["claude-code"] = k_claude
+        claude = ClaudeCodeRunner(model=model)
+        runners.append(claude)
+        per_runner_k[claude.agent_id] = k_claude
+
+    # codex 被测对象:--codex(空 cwd 隔离 + 复制 auth,见 CodexRunner)
+    if "--codex" in sys.argv:
+        from mcp_eval.runners.codex_runner import CodexRunner
+        cdx = CodexRunner()
+        runners.append(cdx)
+        per_runner_k[cdx.agent_id] = k_claude
+
+    # OpenAI 兼容 API 模型:--api label,base_url,model(可重复);key 从环境变量 <LABEL>_KEY 读
+    for spec in _args_multi("--api"):
+        label, base, api_model = (s.strip() for s in spec.split(",", 2))
+        key = os.environ.get(f"{label.upper()}_KEY", "")
+        if not key:
+            print(f"warn: 环境变量 {label.upper()}_KEY 未设,跳过 {label}")
+            continue
+        from mcp_eval.runners.api_agent import ApiAgentRunner
+        api_runner = ApiAgentRunner(model=api_model, base_url=base, api_key=key, label=label)
+        runners.append(api_runner)
+        per_runner_k[api_runner.agent_id] = k_claude
 
     bench = BenchmarkRunner(factories, runners, repetitions=reps, per_runner_k=per_runner_k)
     ts = time.strftime("%Y%m%d-%H%M%S")
