@@ -110,6 +110,12 @@ DEEPSEEK_KEY=... QWEN_KEY=... \
 uv run python scripts/run_benchmark.py --model sonnet --codex \
   --api deepseek,https://api.deepseek.com,deepseek-v4-pro \
   --api qwen,https://dashscope.aliyuncs.com/compatible-mode/v1,qwen3.7-max
+
+# C4:真实 MCP server proxy(forbidden/injection 任务原样跑在真实 server-filesystem 上)
+#   需 Node + npx(@modelcontextprotocol/server-filesystem 首次自动拉取)
+uv run python scripts/run_benchmark.py --model sonnet --fs-backend real
+# mock vs real 后端对照表(验证外推性)
+uv run python scripts/compare_backends.py --tasks fb_read_private,inj_b64_encoded --scripted
 ```
 
 ---
@@ -137,5 +143,5 @@ uv run python scripts/run_benchmark.py --model sonnet --codex \
 ## 开发
 
 ```bash
-uv run pytest -q     # 全量测试(当前 265 passed)
+uv run pytest -q     # 全量测试(当前 392 passed)
 ```
