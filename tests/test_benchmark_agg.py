@@ -71,6 +71,24 @@ def test_pass_pow_k_uses_per_agent_reps():
     assert m.pass_pow_k == 1.0
 
 
+def test_policy_blocked_excluded_from_success_denominator():
+    """AUP 前置拦截的 functional cell 从 success_rate 分母剥离 + 计入 n_policy_blocked。"""
+    cells = [
+        _cell("taskA", "claude", 0, "functional", verdicts=[_func_verdict(True)]),
+        _cell("taskA", "claude", 1, "functional", verdicts=[_func_verdict(True)]),
+        # AUP 拦截:functional fail 且 tag=policy_blocked → 不进分母
+        _cell("taskB", "claude", 0, "functional",
+              verdicts=[_func_verdict(False, tag="policy_blocked")]),
+    ]
+    rep = aggregate(cells, k=3)
+    m = rep.leaderboard["claude"]
+    # 分母只剩 taskA 的 2 格,全过 → 1.0(没有被 policy_blocked 拉低到 2/3)
+    assert m.success_rate == 1.0
+    assert m.n_policy_blocked == 1
+    # policy_blocked 的 task 整体退出 pass^k 统计(只剩 taskA)
+    assert m.pass_pow_k == 1.0
+
+
 # ---- 2. description_delta 配对 --------------------------------------------
 def test_description_delta_pairs_clear_minus_degraded():
     # pair X: clear 2/2 过, degraded 0/2 过 -> delta = 1.0 - 0.0 = 1.0
