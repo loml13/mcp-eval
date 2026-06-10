@@ -33,6 +33,22 @@ def _io_events(record: TraceRecord) -> list[dict]:
     ]
 
 
+# API/分类器在模型动手前就拦截的标记(AUP usage-policy block、安全分类器误杀)。
+# 命中即 failure_tag='policy_blocked':非"答错",是评测被前置闸门截胡,应从能力分母剥离。
+_POLICY_BLOCK_MARKERS = (
+    "violate our usage policy",
+    "unable to respond to this request",
+    "has safety measures that flag",
+    "/legal/aup",
+)
+
+
+def _policy_blocked(record: TraceRecord) -> bool:
+    """final_answer 是 API 层的 AUP/安全分类器拒答(模型没机会执行任务)。"""
+    ans = (_get(record, "final_answer", "") or "").lower()
+    return any(m in ans for m in _POLICY_BLOCK_MARKERS)
+
+
 def _all_relevant_errored(record: TraceRecord) -> bool:
     """所有相关 server tool_result 都 errored(且至少有一个)。"""
     results = [
@@ -103,8 +119,17 @@ class FunctionalValidator(Validator):
                 reason="符合任务期望",
                 evidence=evidence,
             )
-        tag = "tool_error" if _all_relevant_errored(record) else "wrong_output"
-        reason = ("工具调用全部出错" if tag == "tool_error" else "; ".join(fails)) or "未满足期望"
+        if _policy_blocked(record):
+            tag = "policy_blocked"
+        elif _all_relevant_errored(record):
+            tag = "tool_error"
+        else:
+            tag = "wrong_output"
+        reason = (
+            {"policy_blocked": "API/分类器前置拦截(AUP),非答错",
+             "tool_error": "工具调用全部出错"}.get(tag)
+            or "; ".join(fails)
+        ) or "未满足期望"
         return Verdict(
             validator=self.name,
             kind=self.kind,

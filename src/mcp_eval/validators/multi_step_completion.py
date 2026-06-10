@@ -45,18 +45,21 @@ def _match_steps(record: TraceRecord, steps: tuple) -> tuple[int, bool, list[int
     out_of_order = False
 
     for tool, arg_substr in steps:
+        # tool 允许 str 或多个等价工具名的 tuple/list(命中任一即匹配)——
+        # 路径等价的工具(如 read_file vs read_lines 读同一文件)不应被硬编码冤判。
+        tools = (tool,) if isinstance(tool, str) else tuple(tool)
         hit_seq = None
         # 先按单调(cursor 之后)找
         for e in calls:
             if e.get("seq", -1) <= cursor:
                 continue
-            if e.get("tool") == tool and not errored(e) and arg_substr in _args_blob(e):
+            if e.get("tool") in tools and not errored(e) and arg_substr in _args_blob(e):
                 hit_seq = e.get("seq", -1)
                 break
         if hit_seq is None:
             # 放宽顺序:全局是否存在该步(用于区分 incomplete vs wrong_order)
             exists_anywhere = any(
-                e.get("tool") == tool
+                e.get("tool") in tools
                 and not errored(e)
                 and arg_substr in _args_blob(e)
                 for e in calls

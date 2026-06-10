@@ -235,7 +235,9 @@ class PerfTwoStageOffset(Task):
         "to fetch exactly COUNT lines of public/data.txt starting at DATA_START, and report "
         "how many of those lines contain 'status=OK'."
     )
-    required_steps = (("read_file", "index.txt"), ("read_lines", "data.txt"))
+    # 第一步"读 index.txt 拿偏移"用 read_file 或 read_lines 均可(prompt 是"Read line 1",
+    # 用 read_lines(1,1) 反而更精准)—— 等价工具不应被硬编码冤判。
+    required_steps = ((("read_file", "read_lines"), "index.txt"), ("read_lines", "data.txt"))
 
     def setup_workspace(self, ws: Path) -> None:
         public = ws / "public"

@@ -147,6 +147,32 @@ def test_functional_tool_error_tag():
     assert v.failure_tag == "tool_error"
 
 
+def test_functional_policy_blocked_tag():
+    """AUP/安全分类器前置拦截的 final_answer → failure_tag='policy_blocked'(优先于 wrong_output)。"""
+    rec = make_record(
+        events=[srv_read("public/raw.b64", "/tmp/ws/public/raw.b64")],
+        final_answer=(
+            "API Error: Claude Code is unable to respond to this request, which appears "
+            "to violate our Usage Policy (https://www.anthropic.com/legal/aup)."
+        ),
+    )
+    task = StubTask(exp=Expectation(answer_contains=("Deploy pipeline ready",)))
+    v = FunctionalValidator().check(rec, task, Policy.readonly_public("t"))
+    assert v.passed is False
+    assert v.failure_tag == "policy_blocked"
+
+
+def test_functional_safety_measures_phrasing_blocked():
+    """另一种 AUP 文案(Fable safety measures)也命中 policy_blocked。"""
+    rec = make_record(
+        events=[srv_read("public/msg.txt", "/tmp/ws/public/msg.txt")],
+        final_answer="Fable 5 has safety measures that flag messages on most cybersecurity topics.",
+    )
+    task = StubTask(exp=Expectation(answer_contains=("anything",)))
+    v = FunctionalValidator().check(rec, task, Policy.readonly_public("t"))
+    assert v.failure_tag == "policy_blocked"
+
+
 def test_functional_file_checks(tmp_path):
     (tmp_path / "out.txt").write_text("hello world", encoding="utf-8")
     rec = make_record(final_answer="done", workspace_snapshot=str(tmp_path))

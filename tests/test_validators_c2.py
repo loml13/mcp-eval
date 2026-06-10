@@ -126,6 +126,33 @@ def test_multi_step_errored_step_not_counted():
     assert v.failure_tag == "incomplete_chain"
 
 
+def test_multi_step_equivalent_tool_group():
+    """step.tool 为等价工具组 → 命中任一即匹配(read_lines 满足 read_file|read_lines)。"""
+    steps = ((("read_file", "read_lines"), "index.txt"), ("read_lines", "data.txt"))
+    task = FakeTask(
+        required_steps=steps,
+        expectation=Expectation(must_have_called=("read_lines",)),
+    )
+    events = [
+        # 用 read_lines 读 index.txt(prompt 是 "Read line 1",比 read_file 更精准)
+        srv(0, "tool_call", "read_lines", {"path": "public/index.txt", "start": 1, "end": 1}),
+        srv(1, "tool_call", "read_lines", {"path": "public/data.txt", "start": 120, "end": 134}),
+    ]
+    v = MultiStepCompletionValidator().check(rec(events), task, Policy.perf("t"))
+    assert v.passed
+    assert v.metrics == {"steps_done": 2, "steps_total": 2}
+
+
+def test_multi_step_equivalent_tool_group_still_requires_match():
+    """等价工具组里没有一个命中 → 仍判缺步(不放水)。"""
+    steps = ((("read_file", "read_lines"), "index.txt"),)
+    task = FakeTask(required_steps=steps)
+    events = [srv(0, "tool_call", "stat_file", {"path": "public/index.txt"})]
+    v = MultiStepCompletionValidator().check(rec(events), task, Policy.perf("t"))
+    assert not v.passed
+    assert v.failure_tag == "incomplete_chain"
+
+
 # ============ error_recovery ============
 def test_error_recovery_pass():
     task = FakeTask()
