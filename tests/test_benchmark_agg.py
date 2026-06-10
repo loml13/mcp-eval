@@ -1,14 +1,17 @@
 """benchmark.aggregate 的纯聚合单测:喂合成 CellResult/Verdict,不跑真实 agent。
 
 断言四大语义:
-1. pass^k 的"全 k 过才算 1"(一个 task 内有任一 rep 挂 → 该 task 计 0)。
-2. description_delta 的 clear/degraded 配对(succ(clear)-succ(degraded))。
-3. 各 rate 的 applicable 分母(只算 applicable cell,不被无关 cell 稀释)。
-4. failure_taxonomy 的计数 + by_category + sample_run_ids。
+1. pass^k 的"全 k 过才算 1"
+2. description_delta 的 clear/degraded 配对
+3. 各 rate 的 applicable 分母(只算 applicable cell)
+4. failure_taxonomy 的计数 + by_category + sample_run_ids
+
+C4 新增:output_tokens_per_success / cost_usd_per_success / mean_cost_usd 的正确性。
 """
 from __future__ import annotations
 
 from mcp_eval.benchmark import CellResult, aggregate
+from mcp_eval.pricing import PRICING, estimate_cost_usd
 from mcp_eval.verdict import Verdict
 
 
@@ -31,6 +34,8 @@ def _cell(
     func_pass: bool = True, verdicts: list[Verdict] | None = None,
     variant_of: str | None = None, variant: str | None = None,
     run_id: str | None = None,
+    tokens_in: int = 0, tokens_out: int = 0,
+    cache_read: int = 0, cache_write: int = 0,
 ) -> CellResult:
     vs = verdicts if verdicts is not None else [_func_verdict(func_pass)]
     safe = all(v.passed for v in vs if v.kind == "safety")
@@ -41,6 +46,9 @@ def _cell(
         category=category, variant_of=variant_of, variant=variant,
         verdicts=vs, functional_pass=fpass, safe=safe,
         record_path=f"/runs/{task_id}-{agent_id}-{rep}/trace.json",
+        tokens_in=tokens_in, tokens_out=tokens_out,
+        tokens_total=tokens_in + tokens_out,
+        cache_read=cache_read, cache_write=cache_write,
     )
 
 
@@ -321,3 +329,144 @@ def test_report_to_json_and_markdown_smoke(tmp_path):
     jp, mp = rep.save(tmp_path)
     assert jp.exists() and mp.exists()
     assert jp.name == "20260608T120000.json"
+
+
+# ---- C4:output_tokens_per_success / cost_usd_per_success / mean_cost_usd ----
+
+def test_output_tokens_per_success_correct():
+    """output_tokens_per_success = mean(tokens_out) over 成功 cell(分母仅成功)。"""
+    cells = [
+        # rep0 成功:tokens_out=200
+        _cell("t1", "claude-sonnet", 0, "functional", func_pass=True,
+              tokens_in=1000, tokens_out=200),
+        # rep1 成功:tokens_out=400
+        _cell("t1", "claude-sonnet", 1, "functional", func_pass=True,
+              tokens_in=1000, tokens_out=400),
+        # rep2 失败:不进分母
+        _cell("t1", "claude-sonnet", 2, "functional", func_pass=False,
+              tokens_in=2000, tokens_out=600),
+    ]
+    m = aggregate(cells, k=3).leaderboard["claude-sonnet"]
+    # 成功 cell 的 tokens_out: 200, 400 → mean = 300
+    assert abs(m.output_tokens_per_success - 300.0) < 1e-9
+
+
+def test_cost_usd_per_success_claude_sonnet():
+    """claude-sonnet 成本:手算 (in/1M*3.0 + out/1M*15.0),分母仅成功 cell。"""
+    mp = PRICING["claude-sonnet"]
+    tokens_in, tokens_out = 100_000, 20_000
+    expected_per_cell = tokens_in / 1_000_000 * mp.input + tokens_out / 1_000_000 * mp.output
+
+    cells = [
+        _cell("t1", "claude-sonnet", 0, "functional", func_pass=True,
+              tokens_in=tokens_in, tokens_out=tokens_out),
+        _cell("t1", "claude-sonnet", 1, "functional", func_pass=True,
+              tokens_in=tokens_in, tokens_out=tokens_out),
+        # 失败 cell(不进 cost_usd_per_success 分母,但进 mean_cost_usd)
+        _cell("t1", "claude-sonnet", 2, "functional", func_pass=False,
+              tokens_in=tokens_in * 2, tokens_out=tokens_out * 2),
+    ]
+    m = aggregate(cells, k=3).leaderboard["claude-sonnet"]
+    assert m.cost_usd_per_success is not None
+    assert abs(m.cost_usd_per_success - expected_per_cell) < 1e-9
+
+
+def test_cost_usd_with_cache_tokens():
+    """claude-opus 带 cache_read/cache_write,USD 算术含 cache 分档。"""
+    mp = PRICING["claude-opus"]
+    tokens_in, tokens_out = 50_000, 10_000
+    cache_read, cache_write = 200_000, 30_000
+    expected = (
+        tokens_in   / 1_000_000 * mp.input
+        + tokens_out  / 1_000_000 * mp.output
+        + cache_read  / 1_000_000 * mp.cache_read
+        + cache_write / 1_000_000 * mp.cache_write
+    )
+
+    cells = [
+        _cell("t1", "claude-opus", 0, "functional", func_pass=True,
+              tokens_in=tokens_in, tokens_out=tokens_out,
+              cache_read=cache_read, cache_write=cache_write),
+    ]
+    m = aggregate(cells, k=1).leaderboard["claude-opus"]
+    assert m.cost_usd_per_success is not None
+    assert abs(m.cost_usd_per_success - expected) < 1e-9
+
+
+def test_mean_cost_usd_includes_failed_cells():
+    """mean_cost_usd = mean over 全部 func cell(含失败);cost_usd_per_success 仅成功。"""
+    mp = PRICING["claude-sonnet"]
+    # 成功 cell:小 token
+    succ_in, succ_out = 50_000, 10_000
+    # 失败 cell:大 token(被包含进 mean,但不进 per_success)
+    fail_in, fail_out = 200_000, 40_000
+    succ_cost = succ_in / 1_000_000 * mp.input + succ_out / 1_000_000 * mp.output
+    fail_cost = fail_in / 1_000_000 * mp.input + fail_out / 1_000_000 * mp.output
+    expected_mean = (succ_cost + fail_cost) / 2
+
+    cells = [
+        _cell("t1", "claude-sonnet", 0, "functional", func_pass=True,
+              tokens_in=succ_in, tokens_out=succ_out),
+        _cell("t2", "claude-sonnet", 0, "functional", func_pass=False,
+              tokens_in=fail_in, tokens_out=fail_out),
+    ]
+    m = aggregate(cells, k=1).leaderboard["claude-sonnet"]
+    assert m.mean_cost_usd is not None
+    assert abs(m.mean_cost_usd - expected_mean) < 1e-9
+    # cost_usd_per_success 仅含成功 cell
+    assert m.cost_usd_per_success is not None
+    assert abs(m.cost_usd_per_success - succ_cost) < 1e-9
+
+
+def test_scripted_cost_is_none():
+    """scripted agent → cost 字段为 None(不经 LLM,定价未录)。"""
+    cells = [
+        _cell("t1", "scripted", 0, "functional", func_pass=True,
+              tokens_in=0, tokens_out=0),
+    ]
+    m = aggregate(cells, k=1).leaderboard["scripted"]
+    assert m.cost_usd_per_success is None
+    assert m.mean_cost_usd is None
+
+
+def test_unknown_agent_cost_is_none():
+    """未知 agent_id → price_key 返回 None → cost 字段为 None。"""
+    cells = [
+        _cell("t1", "unknown-model-xyz", 0, "functional", func_pass=True,
+              tokens_in=10_000, tokens_out=2_000),
+    ]
+    m = aggregate(cells, k=1).leaderboard["unknown-model-xyz"]
+    assert m.cost_usd_per_success is None
+    assert m.mean_cost_usd is None
+
+
+def test_efficiency_markdown_contains_new_columns(tmp_path):
+    """Markdown 报告效率表包含新列名 + cost 格式。"""
+    cells = [
+        _cell("t1", "claude-sonnet", 0, "functional", func_pass=True,
+              tokens_in=100_000, tokens_out=20_000),
+        _cell("t2", "scripted", 0, "functional", func_pass=True,
+              tokens_in=0, tokens_out=0),
+    ]
+    rep = aggregate(cells, k=1, timestamp="test")
+    md = rep.to_markdown()
+    assert "output_tok/success" in md
+    assert "cost/success (USD,est)" in md
+    assert "mean_cost (USD,est)" in md
+    # claude-sonnet 应有 $ 符号;scripted 应有 "—"
+    assert "$" in md
+    assert "—" in md
+    # 诚实脚注
+    assert "output token" in md or "output_tok" in md
+    assert "cache" in md or "下界" in md
+
+
+def test_cost_usd_per_success_none_when_no_successes():
+    """无成功 cell → cost_usd_per_success = None(分母 0,_rate 式守卫)。"""
+    cells = [
+        _cell("t1", "claude-sonnet", 0, "functional", func_pass=False,
+              tokens_in=10_000, tokens_out=2_000),
+    ]
+    m = aggregate(cells, k=1).leaderboard["claude-sonnet"]
+    # 无成功 cell → cost_usd_per_success 为 None(空列表)
+    assert m.cost_usd_per_success is None

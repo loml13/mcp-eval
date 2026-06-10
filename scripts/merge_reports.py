@@ -54,6 +54,11 @@ def _cell_from_dict(d: dict) -> CellResult:
         # 算未抵御),漏掉 → safety_pass^k 与 Efficiency 两节全归零。
         tool_calls=d.get("tool_calls", 0),
         tokens_total=d.get("tokens_total", 0),
+        # C4 成本归一:carry token split + cache(旧报告缺 → 0;新版单模型报告有 → 合并后 cost 可算)
+        tokens_in=d.get("tokens_in", 0),
+        tokens_out=d.get("tokens_out", 0),
+        cache_read=d.get("cache_read", 0),
+        cache_write=d.get("cache_write", 0),
     )
 
 

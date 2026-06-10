@@ -109,8 +109,10 @@ class ClaudeCodeRunner(AgentRunner):
             usage = msg.get("usage") or {}
             if usage:
                 self._emit(ctx, "usage", None, None, None, {
-                    "tokens_in": usage.get("input_tokens", 0),
-                    "tokens_out": usage.get("output_tokens", 0),
+                    "tokens_in":   usage.get("input_tokens", 0),
+                    "tokens_out":  usage.get("output_tokens", 0),
+                    "cache_read":  usage.get("cache_read_input_tokens", 0),
+                    "cache_write": usage.get("cache_creation_input_tokens", 0),
                 })
         elif et == "user":
             msg = ev.get("message", {})

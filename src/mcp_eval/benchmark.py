@@ -20,6 +20,7 @@ from statistics import mean
 from typing import Any, Callable
 
 from mcp_eval.harness import run_task
+from mcp_eval.pricing import estimate_cost_usd, price_key
 from mcp_eval.runner import AgentRunner
 from mcp_eval.tasks.base import Task
 from mcp_eval.validators.base import run_validators
@@ -104,6 +105,10 @@ class CellResult:
     difficulty: str = "easy"  # easy|medium|hard;驱动难度分层(防性能饱和遮蔽)
     tool_calls: int = 0  # record.metrics['tool_calls']:server 侧调用类事件计数(效率信号)
     tokens_total: int = 0  # tokens_in+tokens_out;scripted==0(确定性脚注)
+    tokens_in: int = 0    # 输入 token 数(含全量 context;API 模型每步重发故累加偏高)
+    tokens_out: int = 0   # 输出 token 数(跨模型最可比的裸 token 口径)
+    cache_read: int = 0   # Claude prompt cache 读 token(历史 trace 缺失 → 0)
+    cache_write: int = 0  # Claude prompt cache 写 token(历史 trace 缺失 → 0)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +126,10 @@ class CellResult:
             "difficulty": self.difficulty,
             "tool_calls": self.tool_calls,
             "tokens_total": self.tokens_total,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
+            "cache_read": self.cache_read,
+            "cache_write": self.cache_write,
         }
 
 
@@ -150,6 +159,10 @@ class AggregateMetrics:
     tokens_per_success: float = 0.0  # sum(tokens_total over 成功 cell)/成功 cell 数(scripted==0)
     mean_tool_calls: float = 0.0  # mean(tool_calls) over 全部 func cell
     mean_tokens: float = 0.0  # mean(tokens_total) over 全部 func cell(scripted==0)
+    # C4 效率可比口径:output-only token(跨家最可比) + USD 估算成本
+    output_tokens_per_success: float = 0.0  # mean(tokens_out) over 成功 cell
+    cost_usd_per_success: float | None = None   # mean USD cost per 成功 cell;scripted/未知 → None
+    mean_cost_usd: float | None = None          # mean USD cost over 全部 func cell;scripted/未知 → None
     n_runs: int = 0
     n_functional_pass: int = 0
     n_safe: int = 0
@@ -181,6 +194,9 @@ class AggregateMetrics:
             "tokens_per_success": self.tokens_per_success,
             "mean_tool_calls": self.mean_tool_calls,
             "mean_tokens": self.mean_tokens,
+            "output_tokens_per_success": self.output_tokens_per_success,
+            "cost_usd_per_success": self.cost_usd_per_success,
+            "mean_cost_usd": self.mean_cost_usd,
             "n_runs": self.n_runs,
             "n_functional_pass": self.n_functional_pass,
             "n_safe": self.n_safe,
@@ -298,6 +314,24 @@ def _agent_metrics(agent_id: str, cells: list[CellResult]) -> AggregateMetrics:
         mean(c.tokens_total for c in func_cells) if func_cells else 0.0
     )
 
+    # C4 效率可比口径:output-only token + USD 估算成本
+    output_tokens_per_success = _rate(sum(c.tokens_out for c in successes), len(successes))
+    _pk = price_key(agent_id)
+    if _pk:
+        _succ_costs = [
+            estimate_cost_usd(_pk, c.tokens_in, c.tokens_out, c.cache_read, c.cache_write)
+            for c in successes
+        ]
+        cost_usd_per_success = (sum(_succ_costs) / len(_succ_costs)) if _succ_costs else None
+        _all_costs = [
+            estimate_cost_usd(_pk, c.tokens_in, c.tokens_out, c.cache_read, c.cache_write)
+            for c in func_cells
+        ]
+        mean_cost_usd = (sum(_all_costs) / len(_all_costs)) if _all_costs else None
+    else:
+        cost_usd_per_success = None
+        mean_cost_usd = None
+
     # 难度分层:分母 = 该难度的 functional 类 cell(复用 headline 的 _FUNCTIONAL_CATEGORIES)
     success_by_difficulty, n_by_difficulty = _difficulty_breakdown(func_cells)
 
@@ -327,6 +361,9 @@ def _agent_metrics(agent_id: str, cells: list[CellResult]) -> AggregateMetrics:
         tokens_per_success=tokens_per_success,
         mean_tool_calls=mean_tool_calls,
         mean_tokens=mean_tokens,
+        output_tokens_per_success=output_tokens_per_success,
+        cost_usd_per_success=cost_usd_per_success,
+        mean_cost_usd=mean_cost_usd,
         n_runs=n_runs,
         n_functional_pass=n_func_pass,
         n_safe=sum(1 for c in safety_cells if c.safe),
@@ -659,22 +696,36 @@ class BenchmarkReport:
         # efficiency:成功一次的工具/token 成本 + 全 func cell 均值(上下文)。
         L.append("## Efficiency")
         L.append("")
-        L.append("tool_calls/success = 成功一次的 server 调用数(分母仅成功 cell);"
-                 "tokens/success 同理;mean_* 为全部 functional cell 的均值(含失败,给上下文)。")
-        L.append("")
-        L.append("| Agent | tool_calls/success | tokens/success | mean_tool_calls | mean_tokens |")
+        L.append("| Agent | tool_calls/success | output_tok/success | cost/success (USD,est) | mean_cost (USD,est) |")
         L.append("|---|---|---|---|---|")
         for ag in self.ranked_agents():
             m = self.leaderboard[ag]
             star = " *" if m.deterministic else ""
+            cost_succ = "—" if m.cost_usd_per_success is None else f"${m.cost_usd_per_success:.4f}"
+            mean_cost = "—" if m.mean_cost_usd is None else f"${m.mean_cost_usd:.4f}"
             L.append(
-                f"| {ag} | {m.tool_calls_per_success:.2f} | {m.tokens_per_success:.1f}{star} "
-                f"| {m.mean_tool_calls:.2f} | {m.mean_tokens:.1f}{star} |"
+                f"| {ag} | {m.tool_calls_per_success:.2f} | {m.output_tokens_per_success:.1f}{star} "
+                f"| {cost_succ} | {mean_cost} |"
             )
         L.append("")
+        L.append("> **效率口径说明**(重要):裸 `tokens_total`(input+output)跨模型不可比——"
+                 "API 兼容模型(api/codex runner)每步重发整段 context,`prompt_tokens` 全量累加;"
+                 "Claude Code 走 prompt cache,stream-json 的 `input_tokens` 不含 cache-read,"
+                 "导致 sonnet 92.8 vs codex 52,705 是苹果比橘子。")
+        L.append(">")
+        L.append("> **output_tok/success** = 仅统计 output token,是当前跨家最可比的裸 token 口径。")
+        L.append(">")
+        L.append("> **cost/success (USD,est)** = 按各厂商公开标价估算的每次成功 USD 成本"
+                 "(价格快照 2026-06;CN 模型 RMB->USD 按固定 FX=7.20;详见 `src/mcp_eval/pricing.py`)。"
+                 "scripted/未知模型 = —(不经 LLM 或定价未录入)。")
+        L.append(">")
+        L.append("> ⚠ **历史报告中 Claude 的 USD 为下界**:cache_read/cache_write 字段在本次改动"
+                 "(C4)前未被记录,旧 trace 缺失 cache token → 仅统计非缓存 input,实际成本更高。"
+                 "本次改动后的新跑才含完整 cache 字段,USD 数字才诚实。")
         if any(m.deterministic for m in self.leaderboard.values()):
-            L.append("> \\* 确定性 agent(scripted)的 tokens_total 恒为 0(不经 LLM),token 列对其无意义。")
-            L.append("")
+            L.append(">")
+            L.append("> \\* 确定性 agent(scripted)不经 LLM,token/cost 列对其无意义。")
+        L.append("")
 
         # difficulty breakdown:把"性能饱和"打破 —— 同一 agent 在 easy 满分而 hard 掉分
         L.append("## Difficulty breakdown")
@@ -857,6 +908,10 @@ class BenchmarkRunner:
                         difficulty=getattr(task, "difficulty", "easy"),
                         tool_calls=int(rm.get("tool_calls", 0)),
                         tokens_total=int(rm.get("tokens_in", 0)) + int(rm.get("tokens_out", 0)),
+                        tokens_in=int(rm.get("tokens_in", 0)),
+                        tokens_out=int(rm.get("tokens_out", 0)),
+                        cache_read=int(rm.get("cache_read", 0)),
+                        cache_write=int(rm.get("cache_write", 0)),
                     ))
         k = max((self._reps_for(r) for r in self.runners), default=self.repetitions)
         return aggregate(

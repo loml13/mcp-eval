@@ -126,6 +126,8 @@ def merge(
         "agent_events": sum(1 for e in events if e["source"] == "agent"),
         "tokens_in": sum(e.get("meta", {}).get("tokens_in", 0) for e in usage),
         "tokens_out": sum(e.get("meta", {}).get("tokens_out", 0) for e in usage),
+        "cache_read": sum(e.get("meta", {}).get("cache_read", 0) for e in usage),
+        "cache_write": sum(e.get("meta", {}).get("cache_write", 0) for e in usage),
         "latency_ms": int((max(ts_list) - min(ts_list)) * 1000),
     }
     return TraceRecord(

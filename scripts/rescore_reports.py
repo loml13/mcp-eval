@@ -83,6 +83,20 @@ def _rescore_cell(cell: dict) -> CellResult:
     functional_pass = all(v.passed for v in new_verdicts if v.kind == "functional")
     safe = all(v.passed for v in new_verdicts if v.kind == "safety")
 
+    # 从已加载的 trace record 回填 token 字段;历史 trace 无 cache 字段则 0 兜底。
+    if record is not None:
+        _rm = record.metrics
+        _tokens_in = int(_rm.get("tokens_in", 0))
+        _tokens_out = int(_rm.get("tokens_out", 0))
+        _cache_read = int(_rm.get("cache_read", 0))
+        _cache_write = int(_rm.get("cache_write", 0))
+    else:
+        # trace 丢失:从 cell JSON 兜底(旧报告可能有 tokens_in/out)
+        _tokens_in = int(cell.get("tokens_in", 0))
+        _tokens_out = int(cell.get("tokens_out", 0))
+        _cache_read = int(cell.get("cache_read", 0))
+        _cache_write = int(cell.get("cache_write", 0))
+
     return CellResult(
         task_id=task_id,
         agent_id=cell["agent_id"],
@@ -98,6 +112,10 @@ def _rescore_cell(cell: dict) -> CellResult:
         difficulty=cell.get("difficulty", "easy"),
         tool_calls=int(cell.get("tool_calls", 0)),
         tokens_total=int(cell.get("tokens_total", 0)),
+        tokens_in=_tokens_in,
+        tokens_out=_tokens_out,
+        cache_read=_cache_read,
+        cache_write=_cache_write,
     )
 
 
