@@ -65,10 +65,23 @@ class Task(ABC):
         return default_validators(self)
 
     def server_specs(self) -> list:
-        """解析 self.servers → ServerSpec 列表(harness 据此起 N 个 server)。"""
-        from mcp_eval.servers.registry import SERVER_REGISTRY
+        """解析 self.servers → ServerSpec 列表(harness 据此起 N 个 server)。
 
-        return [SERVER_REGISTRY[s] for s in self.servers]
+        当 MCP_EVAL_FS_BACKEND=real 时,把 id=='fs' 的 spec 换成 real_proxy 模块
+        (id/mcp_key 不变,仅 module 切换),其余 server 不受影响。
+        """
+        import os
+
+        from mcp_eval.servers.registry import SERVER_REGISTRY, ServerSpec
+
+        backend = os.environ.get("MCP_EVAL_FS_BACKEND", "mock")
+        specs = []
+        for s in self.servers:
+            spec = SERVER_REGISTRY[s]
+            if backend == "real" and spec.id == "fs":
+                spec = ServerSpec(spec.id, spec.mcp_key, "mcp_eval.servers.real_proxy")
+            specs.append(spec)
+        return specs
 
     def server_extra_env(self, server_id: str | None = None) -> dict[str, str]:
         """注入某个 server 子进程的额外 env(如 fs 的 MCP_EVAL_DESC_VARIANT、web 的页面/注入开关)。

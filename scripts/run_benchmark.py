@@ -46,6 +46,9 @@ def main() -> None:
     no_claude = "--no-claude" in sys.argv
     no_scripted = "--no-scripted" in sys.argv
     category = _arg("--category")
+    # --fs-backend mock|real:切换 fs server 实现(mock=默认,real=真实 server-filesystem proxy)
+    fs_backend = _arg("--fs-backend", "mock")
+    os.environ["MCP_EVAL_FS_BACKEND"] = fs_backend
     # --model 可重复:多个 Claude 模型同台(如 --model sonnet --model opus)。
     claude_models = _args_multi("--model")
 

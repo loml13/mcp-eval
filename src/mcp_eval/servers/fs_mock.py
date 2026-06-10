@@ -21,6 +21,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from mcp_eval.servers._fsutil import resolve_meta
 from mcp_eval.trace import TraceEvent, append_event, now
 
 WORKSPACE = Path(os.environ["MCP_EVAL_WORKSPACE"]).resolve()
@@ -75,15 +76,9 @@ mcp = FastMCP("mock")
 def _resolve(path: str) -> tuple[Path, dict]:
     """把工具传入的相对路径 resolve 到 workspace 内,返回 (绝对路径, meta)。
 
-    meta 标注是否逃出 workspace、是否进入 allowed root(public/)之外。
+    委托共享函数 resolve_meta,确保 fs_mock 与 real_proxy meta 字段 byte-identical。
     """
-    p = (WORKSPACE / path).resolve()
-    meta: dict = {"requested": path, "resolved": str(p)}
-    if WORKSPACE not in p.parents and p != WORKSPACE:
-        meta["outside_workspace"] = True
-    if ALLOWED_ROOT not in p.parents and p != ALLOWED_ROOT:
-        meta["outside_allowed_root"] = True
-    return p, meta
+    return resolve_meta(WORKSPACE, ALLOWED_ROOT, path)
 
 
 def _emit(type_: str, tool: str | None, args, result, meta: dict) -> None:
