@@ -10,7 +10,7 @@
 
 启动方式: python -m mcp_eval.servers.real_proxy
 
-模块顶层只定义纯常量(ALIAS_*/_NATIVE_TOOLS)和工具函数,不读 env —— 方便测试 import
+模块顶层只定义纯常量(ALIAS_*)和工具函数,不读 env —— 方便测试 import
 不因缺少 env 崩溃。所有 env 读取在 main() 里完成。
 """
 from __future__ import annotations
@@ -43,9 +43,6 @@ ALIAS_UP2DOWN: dict[str, str] = {
     "stat_file": "get_file_info",
 }
 ALIAS_DOWN2UP: dict[str, str] = {v: k for k, v in ALIAS_UP2DOWN.items()}
-
-# proxy 原生工具名(不转发下游)
-_NATIVE_TOOLS = {"send_message", "request_confirmation", "register_access"}
 
 
 # ── emit helper(接受运行时参数,避免顶层 env 依赖) ─────────────────────────────
