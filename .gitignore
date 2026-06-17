@@ -12,5 +12,8 @@ wheels/
 # Eval run artifacts (traces + workspace snapshots)
 runs/
 
+# 外部数据集 + RL 数据产物(Toolathlon 轨迹 CC-BY-4.0,不入仓库)
+data/
+
 # macOS
 .DS_Store

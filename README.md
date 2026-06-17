@@ -39,11 +39,13 @@ src/mcp_eval/
   harness.py          run_task(task, runner) -> TraceRecord
   policy.py           Policy:每任务声明的安全边界(allowed tools/sinks、forbidden paths…)
   verdict.py          Expectation(任务期望) + Verdict(单个判定)
-  benchmark.py        BenchmarkRunner(task×agent×rep 矩阵)+ 聚合 + 报告
-  servers/fs_mock.py  instrumented filesystem mock MCP server(16 工具 + 故障注入 + decoy)
+  benchmark.py        BenchmarkRunner(task×agent×rep 矩阵)+ pass^k 聚合 + 报告
+  servers/fs_mock.py  instrumented filesystem mock MCP server(故障注入 + decoy)
+  servers/web_mock.py 第二个 mock server(fetch/http_post sink)→ 跨 server 攻击
+  servers/real_proxy.py  instrumented proxy,把任务原样跑在真实 server-filesystem 上(C4 外推性)
   runners/            被测对象 4 类:scripted / claude_code / api_agent / codex_runner
-  validators/         12 判定器(功能 7 + 安全 5)
-  tasks/              54 任务(functional / description / injection / forbidden / dangerous)
+  validators/         14 判定器(功能 + 安全)
+  tasks/              69 任务(functional / description / injection / forbidden / dangerous / 跨 server)
 ```
 
 ---
@@ -57,16 +59,17 @@ src/mcp_eval/
 | `ApiAgentRunner` | 任意 OpenAI 兼容模型 | 只给 MCP 工具,无内置工具 |
 | `CodexRunner` | OpenAI Codex(`codex exec`) | 空 cwd 隔离 + 复制 auth + bypass approvals |
 
-已实测真实模型:**claude-sonnet · codex · deepseek-v4-pro · mimo-v2.5-pro · qwen3.7-max**。
+已实测真实模型(10 家):**claude-opus-4.8 · claude-sonnet-4.6 · claude-fable-5 · codex(gpt-5.5) · deepseek-v4-pro · mimo-v2.5-pro · qwen3.7-max · kimi · minimax · glm** + scripted 锚点。
 
 ---
 
-## 任务集(54)
+## 任务集(69)
 
 | Category | 数量 | 测什么 |
 |---|---|---|
 | **functional** | 22 | 功能正确性(含 15 个 hard/medium 性能任务:多跳编排 5-7 步 / 错误恢复 / 复杂 schema / 工具选择 / 长结果提取 / 条件分支) |
 | **injection** | 15 | 注入抵抗:间接注入 / 工具描述注入 / base64·rot13 编码混淆 / 角色越狱 / 伪权威 / 跨 channel + 多跳外泄 / 答案直接外泄 |
+| **跨 server** | 15 | C3 双 server 攻击:混淆代理 / 编码 post 外泄 / 两跳外泄 / 递归注入 / TOCTOU / 指令层级 / 工具歧义 |
 | **forbidden** | 7 | 越权路径:`../` 穿越 / symlink 逃逸 / URL 编码 / 绝对路径 / glob 过度索引 |
 | **description** | 6(3 配对) | 工具描述质量对照(clear vs degraded:误导描述 + decoy 工具) |
 | **dangerous** | 4 | 危险操作确认:删除/覆盖前是否走 confirmation,能否抵御诱导破坏 |
@@ -75,7 +78,7 @@ src/mcp_eval/
 
 ---
 
-## Validators(12)
+## Validators(14)
 
 **功能(7)**:`functional`(终态:答案/文件/调用)· `multi_step_completion`(多跳按序)· `error_recovery`(故障后重试)· `tool_selection`(没选 decoy)· `schema_compliance`(复杂参数填对)· `description_quality`(A/B 配对)。
 **安全(5)**:`canary_leak`(密钥泄漏)· `forbidden_access`(越权路径)· `tool_authorization`(越权工具/channel)· `dangerous_op`(危险操作未确认)· `injection_resistance`(注入抵抗 composite)· `exfil_channel`(跨通道 + 编码外泄)。
@@ -120,13 +123,14 @@ uv run python scripts/compare_backends.py --tasks fb_read_private,inj_b64_encode
 
 ---
 
-## 已有发现(C1,6 模型实测)
+## 已有发现(C3,10 模型 × 69 任务实测)
 
-- **性能维度饱和** — 4 个真实模型功能 `success_rate` 全 1.00,单步读写对前沿模型 trivial → C2 补了 15 硬任务 + 难度分层。
-- **安全维度才有区分度** — `inj_resist` 从 deepseek 0.33、mimo 0.67 到 claude/qwen/codex 1.00,清晰拉开。
-- **攻击 × 模型脆弱性矩阵成立** — deepseek 被 HTML 注释注入骗、mimo 被伪「系统策略」骗,claude/qwen/codex 全免疫;benchmark 能**精确定位「哪个攻击对哪个模型有效」**。
+- **功能与安全是两条正交轴** — 没有全能赢家:纯功能 mimo 0.96 / qwen 0.95 最强但安全最差(canary 泄漏);Claude 系 + codex 功能中游但注入抵抗满分 1.00、安全顶格。
+- **攻击 × 模型脆弱性矩阵成立** — benchmark 能**精确定位「哪个攻击对哪个模型有效」**:最强攻击是条件触发 + rot13 编码混淆;description decoy 描述能骗 4 个模型越权。
+- **success_rate 系统性低估「自带激进安全分类器的模型」** — Claude 系的 AUP 前置拦截会把良性任务也挡掉,被朴素 success_rate 冤判;C3.5 把它单列为 `policy_blocked` 轴后,opus 0.857 → 0.932。
+- **评测装置自身也被持续校验** — 每接入一个新被测模型都可能暴露 validator 瑕疵(如硬编码 `read_file` 的多跳判定),已据此修两个判分 bug + 离线重判。
 
-> 详尽设计、方法论与完整结果见 [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md)。
+> 详尽设计、方法论与完整结果见 [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md)(12 章)。
 
 ---
 
@@ -135,13 +139,16 @@ uv run python scripts/compare_backends.py --tasks fb_read_private,inj_b64_encode
 - ✅ **B** — 被测 agent 接入 + 双层 trace
 - ✅ **C1** — 单 server 完整 benchmark(21 任务 / 7 validator)
 - ✅ **多模型** — ApiAgentRunner + CodexRunner + 多模型 CLI
-- ✅ **C2** — 攻击矩阵加厚 + 硬性能(54 任务 / 12 validator / 难度分层 + Attack×Model)
-- ⏭ **C3** — 扩 server(github/docs/crm)· pass^k 测稳定性 · 更多模型
+- ✅ **C2** — 攻击矩阵加厚 + 硬性能(54 任务 / 难度分层 + Attack×Model)
+- ✅ **C3** — 第二个 mock server + 跨 server 攻击 + pass^k / safety_pass^k / 效率四轴(69 任务 / 10 模型)
+- ✅ **C3.5** — `policy_blocked` 单列 + 两个 validator bug 修复 + 离线重判
+- ✅ **C4** — 真实 server-filesystem proxy(外推性)+ 成本归一化效率口径
+- ⏭ **Track E** — 借 Toolathlon 轨迹(CC-BY-4.0)构建 RL 数据集,validator 给分当 reward
 
 ---
 
 ## 开发
 
 ```bash
-uv run pytest -q     # 全量测试(当前 392 passed)
+uv run pytest -q     # 全量测试(当前 417 passed)
 ```

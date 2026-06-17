@@ -1,4 +1,4 @@
-"""任务注册表:C1(21)+ C2(33)= 54 个任务工厂。
+"""任务注册表:C1(21)+ C2(33)+ C3 跨 server(15)= 69 个任务工厂。
 
 每个元素都是 zero-arg callable(Task 子类或 lambda 工厂),BenchmarkRunner 每 rep 调一次拿
 fresh 实例(fresh canary + 干净 workspace)。
